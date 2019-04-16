@@ -1,0 +1,74 @@
+pool:
+  name: Hosted VS2017
+  demands: azureps
+
+variables:
+  location: 'uksouth'
+  TerraformStorageRG: 'beardterra'
+  TerraformStorageAccount: 'aksterra1'
+
+steps:
+- task: AzureCLI@1
+  displayName: 'Azure CLI to deploy azure storage for backend'
+  inputs:
+    azureSubscription: 'Microsoft Azure Sponsorship (6d8f994c-9051-4cef-ba61-528bab27d213)'
+    scriptLocation: inlineScript
+    inlineScript: |
+     # the following script will create Azure resource group, Storage account and a Storage container which will be used to store terraform state
+     call az group create --location $(location) --name $(TerraformStorageRG)
+     
+     call az storage account create --name $(TerraformStorageAccount) --resource-group $(TerraformStorageRG) --location $(location) --sku Standard_LRS
+     
+     call az storage container create --name terraform --account-name $(TerraformStorageAccount)
+
+- task: AzurePowerShell@3
+  displayName: 'Azure PowerShell script to get the storage key'
+  inputs:
+    azureSubscription: 'Microsoft Azure Sponsorship (6d8f994c-9051-4cef-ba61-528bab27d213)'
+    ScriptType: InlineScript
+    Inline: |
+     # Using this script we will fetch storage key which is required in terraform file to authenticate backend stoarge account
+     
+     $key=(Get-AzureRmStorageAccountKey -ResourceGroupName $(TerraformStorageRG) -AccountName $(TerraformStorageAccount)).Value[0]
+     
+     Write-Host "##vso[task.setvariable variable=TerraformStorageKey]$key"
+    azurePowerShellVersion: LatestVersion
+
+- task: qetza.replacetokens.replacetokens-task.replacetokens@3
+  displayName: 'Replace tokens in terraform file'
+  inputs:
+    rootDirectory: '$BuildDirectory'
+    targetFiles: |
+     **/*.tf
+     **/*.tfvars
+    tokenPrefix: '__'
+    tokenSuffix: '__'
+
+- powershell: |
+   Get-ChildItem $BuildDirectory -Recurse
+   
+   Get-Content $BuildDirectory\*.tf -ea silentlycontinue
+   Get-Content $BuildDirectory\*.tfvars -ea silentlycontinue
+  displayName: 'Check values in files'
+
+- task: petergroenewegen.PeterGroenewegen-Xpirit-Vsts-Release-Terraform.Xpirit-Vsts-Release-Terraform.Terraform@2
+  displayName: 'Initialise Terraform'
+  inputs:
+    TemplatePath: '$(BuildDirectory)'
+    Arguments: 'init -backend-config="0-backend-config.tfvars"'
+    InstallTerraform: true
+
+- task: petergroenewegen.PeterGroenewegen-Xpirit-Vsts-Release-Terraform.Xpirit-Vsts-Release-Terraform.Terraform@2
+  displayName: 'Plan Terraform execution'
+  inputs:
+    TemplatePath: '$(BuildDirectory)'
+    Arguments: plan
+    InstallTerraform: true
+
+- task: petergroenewegen.PeterGroenewegen-Xpirit-Vsts-Release-Terraform.Xpirit-Vsts-Release-Terraform.Terraform@2
+  displayName: 'Apply Terraform'
+  inputs:
+    TemplatePath: '$(BuildDirectory)'
+    Arguments: 'apply -auto-approve'
+    InstallTerraform: true
+
